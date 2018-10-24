@@ -63,9 +63,10 @@ namespace Barotrauma
             float displayRange = attack.Range;
             if (displayRange < 0.1f) return;
 
-            float cameraDist = Vector2.Distance(GameMain.GameScreen.Cam.Position, worldPosition) / 2.0f;
+            Vector2 cameraPos = Character.Controlled != null ? Character.Controlled.WorldPosition : GameMain.GameScreen.Cam.Position;
+            float cameraDist = Vector2.Distance(cameraPos, worldPosition) / 2.0f;
             GameMain.GameScreen.Cam.Shake = CameraShake * Math.Max((displayRange - cameraDist) / displayRange, 0.0f);
-
+            
             if (attack.GetStructureDamage(1.0f) > 0.0f)
             {
                 RangedStructureDamage(worldPosition, displayRange, attack.GetStructureDamage(1.0f));
@@ -78,15 +79,13 @@ namespace Barotrauma
                 {
                     float distSqr = Vector2.DistanceSquared(item.WorldPosition, worldPosition);
                     if (distSqr > displayRangeSqr) continue;
-
-                    //ignore reactors (don't want to blow them up)
-                    if (item.GetComponent<Reactor>() == null) continue;
-
+                    
                     float distFactor = 1.0f - (float)Math.Sqrt(distSqr) / displayRange;
 
                     //damage repairable power-consuming items
-                    var powerTransfer = item.GetComponent<Powered>();
-                    if (powerTransfer != null && item.FixRequirements.Count > 0)
+                    var powered = item.GetComponent<Powered>();
+                    if (powered == null || !powered.VulnerableToEMP) continue;
+                    if (item.FixRequirements.Count > 0)
                     {
                         item.Condition -= 100 * empStrength * distFactor;
                     }
@@ -182,6 +181,7 @@ namespace Barotrauma
                     if (limb.WorldPosition != worldPosition && force > 0.0f)
                     {
                         Vector2 limbDiff = Vector2.Normalize(limb.WorldPosition - worldPosition);
+                        if (!MathUtils.IsValid(limbDiff)) limbDiff = Rand.Vector(1.0f);
                         Vector2 impulsePoint = limb.SimPosition - limbDiff * limbRadius;
                         limb.body.ApplyLinearImpulse(limbDiff * distFactor * force, impulsePoint);
                     }

@@ -3,10 +3,10 @@
 using System;
 using System.IO;
 using System.Text;
+using GameAnalyticsSDK.Net;
 
 #if WINDOWS
 using System.Windows.Forms;
-using GameAnalyticsSDK.Net;
 using Microsoft.Xna.Framework.Graphics;
 #endif
 
@@ -203,7 +203,7 @@ namespace Barotrauma
             if (GameSettings.SendUserStatistics)
             {
                 CrashMessageBox( "A crash report (\"crashreport.log\") was saved in the root folder of the game and sent to the developers.");
-                GameAnalytics.AddErrorEvent(EGAErrorSeverity.Error, crashReport);
+                GameAnalytics.AddErrorEvent(EGAErrorSeverity.Critical, crashReport);
                 GameAnalytics.OnStop();
             }
             else

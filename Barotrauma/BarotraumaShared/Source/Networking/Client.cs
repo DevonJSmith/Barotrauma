@@ -29,10 +29,20 @@ namespace Barotrauma.Networking
 
         public byte TeamID = 0;
 
-        public Character Character;
+        private Character character;
+        public Character Character
+        {
+            get { return character; }
+            set
+            {
+                character = value;
+                if (character != null) HasSpawned = true;
+            }
+        }
         public CharacterInfo CharacterInfo;
         public NetConnection Connection { get; set; }
-        public bool InGame;
+        public bool InGame;        
+        public bool HasSpawned; //has the client spawned as a character during the current round
         
         public UInt16 LastRecvGeneralUpdate = 0;
         
@@ -124,17 +134,19 @@ namespace Barotrauma.Networking
             JobPreferences = new List<JobPrefab>(JobPrefab.List.GetRange(0, Math.Min(JobPrefab.List.Count, 3)));
         }
 
-        public static bool IsValidName(string name)
+        public static bool IsValidName(string name, GameServer server)
         {
             if (name.Contains("\n") || name.Contains("\r")) return false;
+            if (name.Any(c => c == ';' || c == ',' || c == '<' || c == '/')) return false;
 
-            return (name.All(c =>
-                c != ';' &&
-                c != ',' &&
-                c != '<' &&
-                c != '/'));
+            foreach (char character in name)
+            {
+                if (!server.AllowedClientNameChars.Any(charRange => (int)character >= charRange.First && (int)character <= charRange.Second)) return false;
+            }
+
+            return true;
         }
-        
+
         public static string SanitizeName(string name)
         {
             name = name.Trim();
@@ -145,16 +157,8 @@ namespace Barotrauma.Networking
             string rName = "";
             for (int i = 0; i < name.Length; i++)
             {
-                if (name[i] < 32)
-                {
-                    rName += '?';
-                }
-                else
-                {
-                    rName += name[i];
-                }
+                rName += name[i] < 32 ? '?' : name[i];
             }
-
             return rName;
         }
 
@@ -206,6 +210,11 @@ namespace Barotrauma.Networking
         public void RemoveKickVote(Client voter)
         {
             kickVoters.Remove(voter);
+        }
+        
+        public bool HasKickVoteFrom(Client voter)
+        {
+            return kickVoters.Contains(voter);
         }
 
         public bool HasKickVoteFromID(int id)

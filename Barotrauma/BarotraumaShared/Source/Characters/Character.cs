@@ -144,6 +144,10 @@ namespace Barotrauma
         {
             get
             {
+                if (GameMain.Server != null && !GameMain.Server.AllowDisguises) return Name;
+#if CLIENT
+                if (GameMain.Client != null && !GameMain.Client.AllowDisguises) return Name;
+#endif
                 return info != null && !string.IsNullOrWhiteSpace(info.Name) ? info.Name + (info.DisplayName != info.Name ? " (as " + info.DisplayName + ")" : "") : SpeciesName;
             }
         }
@@ -1354,15 +1358,7 @@ namespace Barotrauma
         public void DeselectCharacter()
         {
             if (SelectedCharacter == null) return;
-
-            if (SelectedCharacter.AnimController != null)
-            {
-                foreach (Limb limb in SelectedCharacter.AnimController.Limbs)
-                {
-                    if (limb.pullJoint != null) limb.pullJoint.Enabled = false;
-                }
-            }
-
+            SelectedCharacter.AnimController?.ResetPullJoints();
             SelectedCharacter = null;
         }
 
@@ -1611,12 +1607,20 @@ namespace Barotrauma
             //Health effects
             if (needsAir) UpdateOxygen(deltaTime);
 
-            Health -= bleeding * deltaTime;
-            Bleeding -= BleedingDecreaseSpeed * deltaTime;
+            if (DoesBleed)
+            {
+                Health -= bleeding * deltaTime;
+                Bleeding -= BleedingDecreaseSpeed * deltaTime;
+            }
 
             if (health <= minHealth) Kill(CauseOfDeath.Bloodloss);
+            
+            UpdateSightRange();
+            if (aiTarget != null) aiTarget.SoundRange = 0.0f;
 
-            if (!IsDead) LockHands = false;
+            lowPassMultiplier = MathHelper.Lerp(lowPassMultiplier, 1.0f, 0.1f);
+
+            if (health <= minHealth) Kill(CauseOfDeath.Bloodloss);
 
             //ragdoll button
             if (IsRagdolled)
@@ -1643,21 +1647,7 @@ namespace Barotrauma
                 selectedConstruction = null;
             }
 
-            UpdateSightRange();
-            if (aiTarget != null) aiTarget.SoundRange = 0.0f;
-
-            lowPassMultiplier = MathHelper.Lerp(lowPassMultiplier, 1.0f, 0.1f);
-
-            if (DoesBleed)
-            {
-                Health -= bleeding * deltaTime;
-                Bleeding -= BleedingDecreaseSpeed * deltaTime;
-            }
-
-            if (health <= minHealth) Kill(CauseOfDeath.Bloodloss);
-
             if (!IsDead) LockHands = false;
-            //CPR stuff is handled in the UpdateCPR function in HumanoidAnimController
         }
 
         partial void UpdateControlled(float deltaTime, Camera cam);
@@ -1949,18 +1939,20 @@ namespace Barotrauma
             AnimController.Frozen = false;
 
             GameServer.Log(LogName + " has died (Cause of death: " + causeOfDeath + ")", ServerLog.MessageType.Attack);
-
-            string characterType = "Unknown";
-            if (this == controlled)
-                characterType = "Player";
-            else if (IsRemotePlayer)
-                characterType = "RemotePlayer";
-            else if (AIController is EnemyAIController)
-                characterType = "Enemy";
-            else if (AIController is HumanAIController)
-                characterType = "AICrew";
-            GameAnalyticsSDK.Net.GameAnalytics.AddDesignEvent("Kill:" + characterType + ":" + SpeciesName + ":" + causeOfDeath);
-            
+            if (GameSettings.SendUserStatistics)
+            {
+                string characterType = "Unknown";
+                if (this == controlled)
+                    characterType = "Player";
+                else if (IsRemotePlayer)
+                    characterType = "RemotePlayer";
+                else if (AIController is EnemyAIController)
+                    characterType = "Enemy";
+                else if (AIController is HumanAIController)
+                    characterType = "AICrew";
+                GameAnalyticsManager.AddDesignEvent("Kill:" + characterType + ":" + SpeciesName + ":" + causeOfDeath);
+            }
+                        
             if (OnDeath != null) OnDeath(this, causeOfDeath);
 
             KillProjSpecific();
@@ -1977,11 +1969,7 @@ namespace Barotrauma
                 if (selectedItems[i] != null) selectedItems[i].Drop(this);            
             }
             
-            foreach (Limb limb in AnimController.Limbs)
-            {
-                if (limb.pullJoint == null) continue;
-                limb.pullJoint.Enabled = false;
-            }
+            AnimController.ResetPullJoints();
 
             foreach (RevoluteJoint joint in AnimController.LimbJoints)
             {
@@ -1995,7 +1983,7 @@ namespace Barotrauma
         }
         partial void KillProjSpecific();
 
-        public void Revive(bool isNetworkMessage)
+        public void Revive()
         {
             if (Removed)
             {
@@ -2022,6 +2010,7 @@ namespace Barotrauma
 
             foreach (Limb limb in AnimController.Limbs)
             {
+                limb.body.Enabled = true;
                 limb.IsSevered = false;
             }
 
@@ -2042,6 +2031,9 @@ namespace Barotrauma
 
             base.Remove();
 
+            if (selectedItems[0] != null) selectedItems[0].Drop(this);
+            if (selectedItems[1] != null) selectedItems[1].Drop(this);
+
             if (info != null) info.Remove();
 
             CharacterList.Remove(this);
@@ -2051,9 +2043,6 @@ namespace Barotrauma
             if (aiTarget != null) aiTarget.Remove();            
 
             if (AnimController != null) AnimController.Remove();
-
-            if (selectedItems[0] != null) selectedItems[0].Drop(this);
-            if (selectedItems[1] != null) selectedItems[1].Drop(this);
 
             foreach (Character c in CharacterList)
             {

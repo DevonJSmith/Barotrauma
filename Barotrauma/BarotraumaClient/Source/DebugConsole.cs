@@ -355,9 +355,9 @@ namespace Barotrauma
                         NewMessage("Removed " + me.Name + " (simposition " + me.SimPosition + ")", Color.Orange);
                         MapEntity.mapEntityList.RemoveAt(i);
                     }
-                    else if (me.MoveWithLevel)
+                    else if (!me.ShouldBeSaved)
                     {
-                        NewMessage("Removed " + me.Name + " (MoveWithLevel==true)", Color.Orange);
+                        NewMessage("Removed " + me.Name + " (!ShouldBeSaved)", Color.Orange);
                         MapEntity.mapEntityList.RemoveAt(i);
                     }
                     else if (me is Item)
@@ -394,7 +394,7 @@ namespace Barotrauma
                 NewMessage(GUI.DisableHUD ? "Disabled HUD" : "Enabled HUD", Color.White);
             }));
 
-            commands.Add(new Command("followsub", "followsub: Toggle whether the ", (string[] args) =>
+            commands.Add(new Command("followsub", "followsub: Toggle whether the camera should follow the nearest submarine.", (string[] args) =>
             {
                 Camera.FollowSub = !Camera.FollowSub;
                 NewMessage(Camera.FollowSub ? "Set the camera to follow the closest submarine" : "Disabled submarine following.", Color.White);
@@ -437,6 +437,8 @@ namespace Barotrauma
                 GameMain.Config.WindowMode = WindowMode.Fullscreen;
                 NewMessage("Resolution set to 0 x 0 (screen resolution will be used)", Color.Green);
                 NewMessage("Fullscreen enabled", Color.Green);
+
+                GameSettings.ShowUserStatisticsPrompt = true;
 
                 GameSettings.VerboseLogging = false;
 

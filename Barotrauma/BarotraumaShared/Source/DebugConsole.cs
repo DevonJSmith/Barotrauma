@@ -88,6 +88,7 @@ namespace Barotrauma
 
             public void Execute(string[] args)
             {
+                if (onExecute == null) return;
                 onExecute(args);
             }
 
@@ -100,6 +101,7 @@ namespace Barotrauma
             {
                 if (onClientRequestExecute == null)
                 {
+                    if (onExecute == null) return;
                     onExecute(args);
                 }
                 else
@@ -188,6 +190,17 @@ namespace Barotrauma
                     NewMessage("- Traitor " + t.Character.Name + "'s target is " + t.TargetCharacter.Name + ".", Color.Cyan);
                 }
                 NewMessage("The code words are: " + traitorManager.codeWords + ", response: " + traitorManager.codeResponse + ".", Color.Cyan);
+            },
+            null,
+            (Client client, Vector2 cursorPos, string[] args) =>
+            {
+                TraitorManager traitorManager = GameMain.Server.TraitorManager;
+                if (traitorManager == null) return;
+                foreach (Traitor t in traitorManager.TraitorList)
+                {
+                    GameMain.Server.SendConsoleMessage("- Traitor " + t.Character.Name + "'s target is " + t.TargetCharacter.Name + ".", client);
+                }
+                GameMain.Server.SendConsoleMessage("The code words are: " + traitorManager.codeWords + ", response: " + traitorManager.codeResponse + ".", client);
             }));
 
             commands.Add(new Command("itemlist", "itemlist: List all the item prefabs available for spawning.", (string[] args) =>
@@ -247,11 +260,10 @@ namespace Barotrauma
                 };
             }));
 
-            commands.Add(new Command("spawnitem", "spawnitem [itemname] [cursor/inventory]: Spawn an item at the position of the cursor, in the inventory of the controlled character or at a random spawnpoint if the last parameter is omitted.",
+            commands.Add(new Command("spawnitem", "spawnitem [itemname] [cursor/inventory/cargo/random/[name]]: Spawn an item at the position of the cursor, in the inventory of the controlled character, in the inventory of the client with the given name, or at a random spawnpoint if the last parameter is omitted or \"random\".",
             (string[] args) =>
             {
-                string errorMsg;
-                SpawnItem(args, GameMain.GameScreen.Cam.ScreenToWorld(PlayerInput.MousePosition), out errorMsg);
+                SpawnItem(args, GameMain.GameScreen.Cam.ScreenToWorld(PlayerInput.MousePosition), Character.Controlled, out string errorMsg);
                 if (!string.IsNullOrWhiteSpace(errorMsg))
                 {
                     ThrowError(errorMsg);
@@ -260,20 +272,18 @@ namespace Barotrauma
             null,
             (Client client, Vector2 cursorWorldPos, string[] args) =>
             {
-                string errorMsg;
-                SpawnItem(args, cursorWorldPos, out errorMsg);
+                SpawnItem(args, cursorWorldPos, client.Character, out string errorMsg);
                 if (!string.IsNullOrWhiteSpace(errorMsg))
                 {
-                    ThrowError(errorMsg);
+                    GameMain.Server.SendConsoleMessage(errorMsg, client);
                 }
-            }, 
+            },
             () =>
             {
                 List<string> itemNames = new List<string>();
                 foreach (MapEntityPrefab prefab in MapEntityPrefab.List)
                 {
-                    ItemPrefab itemPrefab = prefab as ItemPrefab;
-                    if (itemPrefab != null) itemNames.Add(itemPrefab.Name);
+                    if (prefab is ItemPrefab itemPrefab) itemNames.Add(itemPrefab.Name);
                 }
 
                 return new string[][]
@@ -282,6 +292,7 @@ namespace Barotrauma
                     new string[] { "cursor", "inventory" }
                 };
             }));
+
 
             commands.Add(new Command("disablecrewai", "disablecrewai: Disable the AI of the NPCs in the crew.", (string[] args) =>
             {
@@ -849,8 +860,7 @@ namespace Barotrauma
             {
                 if (args.Length < 2) return;
 
-                int id;
-                int.TryParse(args[0], out id);
+                int.TryParse(args[0], out int id);
                 var client = GameMain.Server.ConnectedClients.Find(c => c.ID == id);
                 if (client == null)
                 {
@@ -891,8 +901,7 @@ namespace Barotrauma
                     return;
                 }
 
-                int id;
-                int.TryParse(args[0], out id);
+                int.TryParse(args[0], out int id);
                 var client = GameMain.Server.ConnectedClients.Find(c => c.ID == id);
                 if (client == null)
                 {
@@ -1019,11 +1028,10 @@ namespace Barotrauma
 
             commands.Add(new Command("kickid", "kickid [id]: Kick the player with the specified client ID out of the server.", (string[] args) =>
             {
-                if (GameMain.Server == null || args.Length == 0) return;
+                if (GameMain.NetworkMember == null || args.Length == 0) return;
 
-                int id = 0;
-                int.TryParse(args[0], out id);
-                var client = GameMain.Server.ConnectedClients.Find(c => c.ID == id);
+                int.TryParse(args[0], out int id);
+                var client = GameMain.NetworkMember.ConnectedClients.Find(c => c.ID == id);
                 if (client == null)
                 {
                     ThrowError("Client id \"" + id + "\" not found.");
@@ -1032,7 +1040,7 @@ namespace Barotrauma
 
                 ShowQuestionPrompt("Reason for kicking \"" + client.Name + "\"?", (reason) =>
                 {
-                    GameMain.Server.KickPlayer(client.Name, reason);                    
+                    GameMain.NetworkMember.KickPlayer(client.Name, reason);                    
                 });
             }));
 
@@ -1073,17 +1081,16 @@ namespace Barotrauma
 
             commands.Add(new Command("banid", "banid [id]: Kick and ban the player with the specified client ID from the server.", (string[] args) =>
             {
-                if (GameMain.Server == null || args.Length == 0) return;
+                if (GameMain.NetworkMember == null || args.Length == 0) return;
 
-                int id = 0;
-                int.TryParse(args[0], out id);
-                var client = GameMain.Server.ConnectedClients.Find(c => c.ID == id);
+                int.TryParse(args[0], out int id);
+                var client = GameMain.NetworkMember.ConnectedClients.Find(c => c.ID == id);
                 if (client == null)
                 {
                     ThrowError("Client id \"" + id + "\" not found.");
                     return;
                 }
-
+                
                 ShowQuestionPrompt("Reason for banning \"" + client.Name + "\"?", (reason) =>
                 {
                     ShowQuestionPrompt("Enter the duration of the ban (leave empty to ban permanently, or use the format \"[days] d [hours] h\")", (duration) =>
@@ -1091,8 +1098,7 @@ namespace Barotrauma
                         TimeSpan? banDuration = null;
                         if (!string.IsNullOrWhiteSpace(duration))
                         {
-                            TimeSpan parsedBanDuration;
-                            if (!TryParseTimeSpan(duration, out parsedBanDuration))
+                            if (!TryParseTimeSpan(duration, out TimeSpan parsedBanDuration))
                             {
                                 ThrowError("\"" + duration + "\" is not a valid ban duration. Use the format \"[days] d [hours] h\", \"[days] d\" or \"[hours] h\".");
                                 return;
@@ -1100,7 +1106,7 @@ namespace Barotrauma
                             banDuration = parsedBanDuration;
                         }
 
-                        GameMain.Server.BanPlayer(client.Name, reason, false, banDuration);
+                        GameMain.NetworkMember.BanPlayer(client.Name, reason, false, banDuration);
                     });
                 });
             }));
@@ -1117,8 +1123,7 @@ namespace Barotrauma
                         TimeSpan? banDuration = null;
                         if (!string.IsNullOrWhiteSpace(duration))
                         {
-                            TimeSpan parsedBanDuration;
-                            if (!TryParseTimeSpan(duration, out parsedBanDuration))
+                            if (!TryParseTimeSpan(duration, out TimeSpan parsedBanDuration))
                             {
                                 ThrowError("\"" + duration + "\" is not a valid ban duration. Use the format \"[days] d [hours] h\", \"[days] d\" or \"[hours] h\".");
                                 return;
@@ -1139,23 +1144,72 @@ namespace Barotrauma
                             }
                         }
                     });
+                });                
+            },
+            (string[] args) =>
+            {
+#if CLIENT
+                if (GameMain.Client == null || args.Length == 0) return;
+                ShowQuestionPrompt("Reason for banning the ip \"" + args[0] + "\"?", (reason) =>
+                {
+                    ShowQuestionPrompt("Enter the duration of the ban (leave empty to ban permanently, or use the format \"[days] d [hours] h\")", (duration) =>
+                    {
+                        TimeSpan? banDuration = null;
+                        if (!string.IsNullOrWhiteSpace(duration))
+                        {
+                            if (!TryParseTimeSpan(duration, out TimeSpan parsedBanDuration))
+                            {
+                                ThrowError("\"" + duration + "\" is not a valid ban duration. Use the format \"[days] d [hours] h\", \"[days] d\" or \"[hours] h\".");
+                                return;
+                            }
+                            banDuration = parsedBanDuration;
+                        }
+
+                        GameMain.Client.SendConsoleCommand(
+                            "banip " +
+                            args[0] + " " +
+                            (banDuration.HasValue ? banDuration.Value.TotalSeconds.ToString() : "0") + " "  +
+                            reason);
+                    });
                 });
-                
+#endif
+            },
+            (Client client, Vector2 cursorPos, string[] args) =>
+            {
+                if (args.Length < 1) return;
+                var clients = GameMain.Server.ConnectedClients.FindAll(c => c.Connection.RemoteEndPoint.Address.ToString() == args[0]);
+                TimeSpan? duration = null;
+                if (args.Length > 1)
+                {
+                    if (double.TryParse(args[1], out double durationSeconds))
+                    {
+                        if (durationSeconds > 0) duration = TimeSpan.FromSeconds(durationSeconds);
+                    }
+                    else
+                    {
+                        GameMain.Server.SendConsoleMessage("\"" + args[1] + "\" is not a valid ban duration.", client);
+                        return;
+                    }
+                }
+                string reason = "";
+                if (args.Length > 2) reason = string.Join(" ", args.Skip(2));
+
+                if (clients.Count == 0)
+                {
+                    GameMain.Server.BanList.BanPlayer("Unnamed", args[0], reason, duration);
+                }
+                else
+                {
+                    foreach (Client cl in clients)
+                    {
+                        GameMain.Server.BanClient(cl, reason, false, duration);
+                    }
+                }
             }));
 
             commands.Add(new Command("teleportcharacter|teleport", "teleport [character name]: Teleport the specified character to the position of the cursor. If the name parameter is omitted, the controlled character will be teleported.", (string[] args) =>
             {
-                Character tpCharacter = null; 
-
-                if (args.Length == 0)
-                {
-                    tpCharacter = Character.Controlled;
-                }
-                else
-                {
-                    tpCharacter = FindMatchingCharacter(args, false);
-                }
-
+                Character tpCharacter = (args.Length == 0) ? Character.Controlled : FindMatchingCharacter(args, false);
                 if (tpCharacter == null) return;
                 
                 var cam = GameMain.GameScreen.Cam;
@@ -1167,17 +1221,7 @@ namespace Barotrauma
             null, 
             (Client client, Vector2 cursorWorldPos, string[] args) => 
             {
-                Character tpCharacter = null;
-
-                if (args.Length == 0)
-                {
-                    tpCharacter = client.Character;
-                }
-                else
-                {
-                    tpCharacter = FindMatchingCharacter(args, false);
-                }
-
+                Character tpCharacter = (args.Length == 0) ? client.Character : FindMatchingCharacter(args, false);
                 if (tpCharacter == null) return;
 
                 var cam = GameMain.GameScreen.Cam;
@@ -1234,18 +1278,29 @@ namespace Barotrauma
                 }
             }));
 
+            commands.Add(new Command("findentityids", "findentityids [entityname]", (string[] args) =>
+            {
+                if (args.Length == 0) return;
+                args[0] = args[0].ToLowerInvariant();
+                foreach (MapEntity mapEntity in MapEntity.mapEntityList)
+                {
+                    if (mapEntity.Name.ToLowerInvariant() == args[0])
+                    {
+                        ThrowError(mapEntity.ID + ": " + mapEntity.Name.ToString());
+                    }
+                }
+                foreach (Character character in Character.CharacterList)
+                {
+                    if (character.Name.ToLowerInvariant() == args[0] || character.SpeciesName.ToLowerInvariant() == args[0])
+                    {
+                        ThrowError(character.ID + ": " + character.Name.ToString());
+                    }
+                }
+            }));
+
             commands.Add(new Command("heal", "heal [character name]: Restore the specified character to full health. If the name parameter is omitted, the controlled character will be healed.", (string[] args) =>
             {
-                Character healedCharacter = null;
-                if (args.Length == 0)
-                {
-                    healedCharacter = Character.Controlled;
-                }
-                else
-                {
-                    healedCharacter = FindMatchingCharacter(args);
-                }
-
+                Character healedCharacter = (args.Length == 0) ? Character.Controlled : FindMatchingCharacter(args);
                 if (healedCharacter != null)
                 {
                     healedCharacter.AddDamage(CauseOfDeath.Damage, -healedCharacter.MaxHealth, null);
@@ -1257,16 +1312,7 @@ namespace Barotrauma
             null,
             (Client client, Vector2 cursorWorldPos, string[] args) =>
             {
-                Character healedCharacter = null;
-                if (args.Length == 0)
-                {
-                    healedCharacter =  client.Character;
-                }
-                else
-                {
-                    healedCharacter = FindMatchingCharacter(args);
-                }
-
+                Character healedCharacter = (args.Length == 0) ? client.Character : FindMatchingCharacter(args);
                 if (healedCharacter != null)
                 {
                     healedCharacter.AddDamage(CauseOfDeath.Damage, -healedCharacter.MaxHealth, null);
@@ -1285,19 +1331,10 @@ namespace Barotrauma
 
             commands.Add(new Command("revive", "revive [character name]: Bring the specified character back from the dead. If the name parameter is omitted, the controlled character will be revived.", (string[] args) =>
             {
-                Character revivedCharacter = null;
-                if (args.Length == 0)
-                {
-                    revivedCharacter = Character.Controlled;
-                }
-                else
-                {
-                    revivedCharacter = FindMatchingCharacter(args);
-                }
-
+                Character revivedCharacter = (args.Length == 0) ? Character.Controlled : FindMatchingCharacter(args);
                 if (revivedCharacter == null) return;
                 
-                revivedCharacter.Revive(false);
+                revivedCharacter.Revive();
                 if (GameMain.Server != null)
                 {
                     foreach (Client c in GameMain.Server.ConnectedClients)
@@ -1313,19 +1350,10 @@ namespace Barotrauma
             null,
             (Client client, Vector2 cursorWorldPos, string[] args) => 
             {
-                Character revivedCharacter = null;
-                if (args.Length == 0)
-                {
-                    revivedCharacter = client.Character;
-                }
-                else
-                {
-                    revivedCharacter = FindMatchingCharacter(args);
-                }
-
+                Character revivedCharacter = (args.Length == 0) ? client.Character : FindMatchingCharacter(args);
                 if (revivedCharacter == null) return;
 
-                revivedCharacter.Revive(false);
+                revivedCharacter.Revive();
                 if (GameMain.Server != null)
                 {
                     foreach (Client c in GameMain.Server.ConnectedClients)
@@ -1358,16 +1386,16 @@ namespace Barotrauma
 
             commands.Add(new Command("ragdoll", "ragdoll [character name]: Force-ragdoll the specified character. If the name parameter is omitted, the controlled character will be ragdolled.", (string[] args) =>
             {
-                Character ragdolledCharacter = null;
-                if (args.Length == 0)
+                Character ragdolledCharacter = (args.Length == 0) ? Character.Controlled : FindMatchingCharacter(args);  
+                if (ragdolledCharacter != null)
                 {
-                    ragdolledCharacter = Character.Controlled;
+                    ragdolledCharacter.IsForceRagdolled = !ragdolledCharacter.IsForceRagdolled;
                 }
-                else
-                {
-                    ragdolledCharacter = FindMatchingCharacter(args);
-                }
-
+            },
+            null,
+            (Client client, Vector2 cursorWorldPos, string[] args) =>
+            {
+                Character ragdolledCharacter = (args.Length == 0) ? client.Character : FindMatchingCharacter(args);
                 if (ragdolledCharacter != null)
                 {
                     ragdolledCharacter.IsForceRagdolled = !ragdolledCharacter.IsForceRagdolled;
@@ -1477,20 +1505,21 @@ namespace Barotrauma
 
             commands.Add(new Command("kill", "kill [character]: Immediately kills the specified character.", (string[] args) =>
             {
-                Character killedCharacter = null;
-                if (args.Length == 0)
+                Character killedCharacter = (args.Length == 0) ? Character.Controlled : FindMatchingCharacter(args);                
+                killedCharacter?.AddDamage(CauseOfDeath.Damage, killedCharacter.MaxHealth * 2, null);
+            },
+            null,
+            (Client client, Vector2 cursorWorldPos, string[] args) =>
+            {
+                Character killedCharacter = (args.Length == 0) ? client.Character : FindMatchingCharacter(args);
+                killedCharacter?.AddDamage(CauseOfDeath.Damage, killedCharacter.MaxHealth * 2, null);                
+            },
+            () =>
+            {
+                return new string[][]
                 {
-                    killedCharacter = Character.Controlled;
-                }
-                else
-                {
-                    killedCharacter = FindMatchingCharacter(args);
-                }
-
-                if (killedCharacter != null)
-                {
-                    killedCharacter.AddDamage(CauseOfDeath.Damage, killedCharacter.MaxHealth * 2, null);
-                }
+                    Character.CharacterList.Select(c => c.Name).Distinct().ToArray()
+                };
             }));
 
             commands.Add(new Command("killmonsters", "killmonsters: Immediately kills all AI-controlled enemies in the level.", (string[] args) =>
@@ -1701,7 +1730,7 @@ namespace Barotrauma
                         var itemContainer = item.GetComponent<ItemContainer>();
                         if (itemContainer != null)
                         {
-                            GameMain.Server.CreateEntityEvent(item, new object[] { NetEntityEvent.Type.InventoryState });
+                            GameMain.Server.CreateEntityEvent(item, new object[] { NetEntityEvent.Type.InventoryState, 0 });
                         }
 
                         GameMain.Server.CreateEntityEvent(item, new object[] { NetEntityEvent.Type.Status });
@@ -1884,10 +1913,19 @@ namespace Barotrauma
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(command)) return;
+            if (string.IsNullOrWhiteSpace(command) || command == "\\" || command == "\n") return;
 
             string[] splitCommand = SplitCommand(command);
-            
+            if (splitCommand.Length == 0)
+            {
+                ThrowError("Failed to execute command \"" + command + "\"!");
+                GameAnalyticsManager.AddErrorEventOnce(
+                    "DebugConsole.ExecuteCommand:LengthZero",
+                    GameAnalyticsSDK.Net.EGAErrorSeverity.Error,
+                    "Failed to execute command \"" + command + "\"!");
+                return;
+            }
+
             if (!splitCommand[0].ToLowerInvariant().Equals("admin"))
             {
                 NewMessage(command, Color.White, true);
@@ -1962,6 +2000,13 @@ namespace Barotrauma
             else if (matchingCommand == null)
             {
                 GameMain.Server.SendConsoleMessage("Command \"" + splitCommand[0] + "\" not found.", client);
+                return;
+            }
+
+            if (!MathUtils.IsValid(cursorWorldPos))
+            {
+                GameMain.Server.SendConsoleMessage("Could not execute command \"" + command + "\" - invalid cursor position.", client);
+                NewMessage(client.Name + " attempted to execute the console command \"" + command + "\" with invalid cursor position.", Color.White);
                 return;
             }
 
@@ -2120,7 +2165,7 @@ namespace Barotrauma
             }
         }
 
-        private static void SpawnItem(string[] args, Vector2 cursorPos, out string errorMsg)
+        private static void SpawnItem(string[] args, Vector2 cursorPos, Character controlledCharacter, out string errorMsg)
         {
             errorMsg = "";
             if (args.Length < 1) return;
@@ -2129,7 +2174,7 @@ namespace Barotrauma
             Inventory spawnInventory = null;
 
             int extraParams = 0;
-            switch (args.Last())
+            switch (args.Last().ToLowerInvariant())
             {
                 case "cursor":
                     extraParams = 1;
@@ -2137,8 +2182,16 @@ namespace Barotrauma
                     break;
                 case "inventory":
                     extraParams = 1;
-                    spawnInventory = Character.Controlled == null ? null : Character.Controlled.Inventory;
+                    spawnInventory = controlledCharacter == null ? null : controlledCharacter.Inventory;
                     break;
+                case "cargo":
+                    var wp = WayPoint.GetRandom(SpawnType.Cargo, null, Submarine.MainSub);
+                    spawnPos = wp == null ? Vector2.Zero : wp.WorldPosition;
+                    break;
+                //Dont do a thing, random is basically Human points anyways - its in the help description.
+                case "random":
+                    extraParams = 1;
+                    return;
                 default:
                     extraParams = 0;
                     break;
@@ -2146,14 +2199,29 @@ namespace Barotrauma
 
             string itemName = string.Join(" ", args.Take(args.Length - extraParams)).ToLowerInvariant();
 
-            var itemPrefab = MapEntityPrefab.Find(itemName) as ItemPrefab;
+            ItemPrefab itemPrefab = MapEntityPrefab.Find(itemName) as ItemPrefab;
+            if (itemPrefab == null && extraParams == 0)
+            {
+                if (GameMain.Server != null)
+                {
+                    var client = GameMain.Server.ConnectedClients.Find(c => c.Name.ToLower() == args.Last().ToLower());
+                    if (client != null)
+                    {
+                        extraParams += 1;
+                        itemName = string.Join(" ", args.Take(args.Length - extraParams)).ToLowerInvariant();
+                        if (client.Character != null && client.Character.Name == args.Last().ToLower()) spawnInventory = client.Character.Inventory;
+                        itemPrefab = MapEntityPrefab.Find(itemName) as ItemPrefab;
+                    }
+                }
+            }
+            //Check again if the item can be found again after having checked for a character
             if (itemPrefab == null)
             {
                 errorMsg = "Item \"" + itemName + "\" not found!";
                 return;
             }
 
-            if (spawnPos == null && spawnInventory == null)
+            if ((spawnPos == null || spawnPos == Vector2.Zero) && spawnInventory == null)
             {
                 var wp = WayPoint.GetRandom(SpawnType.Human, null, Submarine.MainSub);
                 spawnPos = wp == null ? Vector2.Zero : wp.WorldPosition;

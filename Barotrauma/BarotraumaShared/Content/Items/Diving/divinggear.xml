@@ -15,18 +15,20 @@
 
     <Body width="12" height="33" density="5"/>
 
-    <Pickable holdpos="30,-15" handle1="0,1" slots="RightHand,LeftHand,Any">
+    <Holdable slots="Any,RightHand,LeftHand" holdpos="30,-15" handle1="0,5" handle2="0,-5">
       <StatusEffect type="OnFire" target="This" Condition="-100.0" disabledeltatime="true">
+        <Conditional Condition="gt 25"/>
         <sound file="Content/Items/Reactor/explosion.ogg"/>
         <Explosion range="250.0" structuredamage="10" damage="20" stun="5" force="3.0"/>
       </StatusEffect>
-    </Pickable>
+      <StatusEffect type="OnFire" target="This" Condition="-100.0" disabledeltatime="true"/>
+    </Holdable>
   </Item>
 
   <Item
   name="Oxygenite Tank"
   category="Equipment,Misc"
-  Tags="meditem,oxygensource"
+  Tags="smallitem,oxygensource"
   description="A Tank containing liquid Oxygenite.">
 
     <Deconstruct time="10">
@@ -36,16 +38,17 @@
       <Item name="Liquid Oxygenite" mincondition="0.9"/>
     </Deconstruct>
 
-    <Sprite texture ="Content/Items/Tools/tools.png" sourcerect="39,31,12,33" depth="0.55"/>
+    <Sprite texture ="Content/Items/Tools/tools.png" sourcerect="0,77,12,33" depth="0.55"/>
 
     <Body width="12" height="33" density="9.9"/>
 
-    <Pickable holdpos="30,-15" handle1="0,1" slots="RightHand,LeftHand,Any">
+    <Holdable slots="Any,RightHand,LeftHand" holdpos="30,-15" handle1="0,5" handle2="0,-5">
       <StatusEffect type="OnFire" target="This" Condition="-100.0" disabledeltatime="true">
+        <Conditional Condition="gt 20"/>
         <sound file="Content/Items/Reactor/explosion.ogg"/>
-        <Explosion range="250.0" structuredamage="10" damage="20" stun="5" force="3.0"/>
+        <Explosion range="280.0" structuredamage="20" damage="30" stun="8" force="3.0"/>
       </StatusEffect>
-    </Pickable>
+    </Holdable>
   </Item> 
  
   <Item
@@ -136,6 +139,8 @@
       <sprite texture="DivingSuit.png" limb="RightFoot" sound="footstep_armor" sourcerect="30,100,20,25" origin="0.5,0.5" depth="0.013" inheritlimbdepth="false" hidelimb="true"/>
       <sprite texture="DivingSuit.png" limb="LeftFoot" sound="footstep_armor" sourcerect="30,100,20,25" origin="0.5,0.5" depth="0.013" inheritlimbdepth="false" hidelimb="true"/>
 
+      <sprite texture="DivingSuit.png" limb="Waist" sourcerect="0,0,1,1" origin="0.5,0.5" depth="0.0" inheritlimbdepth="false" hidelimb="true"/>
+      
       <StatusEffect type="OnWearing" target="Character" HideFace="true" ObstructVision="true" PressureProtection="100.0" SpeedMultiplier="0.6" LowPassMultiplier="0.2" setvalue="true" disabledeltatime="true"/>
       <StatusEffect type="OnWearing" target="Contained,Character"  OxygenAvailable="1000.0" Condition="-0.5">
         <RequiredItem type="Contained" name="Oxygen Tank"/>

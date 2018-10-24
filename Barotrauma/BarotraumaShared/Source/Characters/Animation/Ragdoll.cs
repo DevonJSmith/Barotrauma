@@ -3,6 +3,7 @@ using FarseerPhysics;
 using FarseerPhysics.Dynamics;
 using FarseerPhysics.Dynamics.Contacts;
 using FarseerPhysics.Dynamics.Joints;
+using FarseerPhysics.Factories;
 using Microsoft.Xna.Framework;
 using System;
 using System.Collections.Generic;
@@ -25,6 +26,11 @@ namespace Barotrauma
                 if (limbs == null)
                 {
                     DebugConsole.ThrowError("Attempted to access a potentially removed ragdoll. Character: " + character.Name + ", id: " + character.ID + ", removed: " + character.Removed + ", ragdoll removed: " + !list.Contains(this));
+                    GameAnalyticsManager.AddErrorEventOnce(
+                        "Ragdoll.Limbs:AccessRemoved",
+                        GameAnalyticsSDK.Net.EGAErrorSeverity.Error,
+                        "Attempted to access a potentially removed ragdoll. Character: " + character.Name + ", id: " + character.ID + ", removed: " + character.Removed + ", ragdoll removed: " + !list.Contains(this) + "\n" + Environment.StackTrace);
+
                     return new Limb[0];
                 }
                 return limbs;
@@ -42,6 +48,7 @@ namespace Barotrauma
                 frozen = value;
                 
                 Collider.PhysEnabled = !frozen;
+                if (frozen && MainLimb != null) MainLimb.PullJointWorldAnchorB = MainLimb.SimPosition;                
             }
         }
 
@@ -87,7 +94,11 @@ namespace Barotrauma
 
         protected List<PhysicsBody> collider;
         protected int colliderIndex = 0;
-        
+
+        private Category prevCollisionCategory = Category.None;
+
+        private Body outsideCollisionBlocker;
+
         public PhysicsBody Collider
         {
             get
@@ -269,11 +280,7 @@ namespace Barotrauma
             get { return ignorePlatforms; }
             set 
             {
-                if (ignorePlatforms == value) return;
                 ignorePlatforms = value;
-
-                UpdateCollisionCategories();
-
             }
         }
 
@@ -352,21 +359,29 @@ namespace Barotrauma
             if (collider[0] == null)
             {
                 DebugConsole.ThrowError("No collider configured for \"" + character.Name + "\"!");
-                collider[0] = new PhysicsBody(0.0f, 0.0f, 0.5f, 5.0f);
-                collider[0].UserData = character;
-                collider[0].BodyType = BodyType.Dynamic;
-                collider[0].CollisionCategories = Physics.CollisionCharacter;
+                collider[0] = new PhysicsBody(0.0f, 0.0f, 0.5f, 5.0f)
+                {
+                    UserData = character,
+                    BodyType = BodyType.Dynamic,
+                    CollisionCategories = Physics.CollisionCharacter
+                };
                 collider[0].FarseerBody.AngularDamping = 5.0f;
                 collider[0].FarseerBody.FixedRotation = true;
                 collider[0].FarseerBody.OnCollision += OnLimbCollision;
             }
 
+            outsideCollisionBlocker = BodyFactory.CreateEdge(GameMain.World, -Vector2.UnitX * 2.0f, Vector2.UnitX * 2.0f, "blocker");
+            outsideCollisionBlocker.BodyType = BodyType.Static;
+            outsideCollisionBlocker.CollisionCategories = Physics.CollisionWall;
+            outsideCollisionBlocker.CollidesWith = Physics.CollisionCharacter;
+            outsideCollisionBlocker.Enabled = false;
+
             UpdateCollisionCategories();
 
             foreach (var joint in LimbJoints)
             {
-                joint.BodyB.SetTransform(
-                    joint.BodyA.Position + (joint.LocalAnchorA - joint.LocalAnchorB)*0.1f,
+                joint.LimbB?.body?.SetTransform(
+                    joint.BodyA.Position + (joint.LocalAnchorA - joint.LocalAnchorB) * 0.1f,
                     (joint.LowerLimit + joint.UpperLimit) / 2.0f);
             }
 
@@ -391,7 +406,7 @@ namespace Barotrauma
             Limb torso = GetLimb(LimbType.Torso);
             Limb head = GetLimb(LimbType.Head);
 
-            MainLimb = torso == null ? head : torso;
+            MainLimb = torso ?? head;
         }
 
         public void AddJoint(XElement subElement, float scale = 1.0f)
@@ -488,7 +503,10 @@ namespace Barotrauma
             Structure structure = f2.Body.UserData as Structure;
 
             if (f2.Body.UserData is Submarine && character.Submarine == (Submarine)f2.Body.UserData) return false;
-            
+
+            //only collide with the ragdoll's own blocker
+            if (f2.Body.UserData as string == "blocker" && f2.Body != outsideCollisionBlocker) return false;
+
             //always collides with bodies other than structures
             if (structure == null)
             {
@@ -687,13 +705,7 @@ namespace Barotrauma
                         limb.MouthPos.Value.Y);
                 }
 
-                if (limb.pullJoint != null)
-                {
-                    limb.pullJoint.LocalAnchorA = 
-                        new Vector2(
-                            -limb.pullJoint.LocalAnchorA.X,
-                            limb.pullJoint.LocalAnchorA.Y);
-                }
+                limb.MirrorPullJoint();
             }            
         }
 
@@ -724,8 +736,8 @@ namespace Barotrauma
         {
             for (int i = 0; i < Limbs.Length; i++)
             {
-                if (Limbs[i] == null || Limbs[i].pullJoint == null) continue;
-                Limbs[i].pullJoint.Enabled = false;
+                if (Limbs[i] == null) continue;
+                Limbs[i].PullJointEnabled = false;
             }
         }
 
@@ -739,7 +751,15 @@ namespace Barotrauma
 
         public void FindHull(Vector2? worldPosition = null, bool setSubmarine = true)
         {
-            Vector2 findPos = worldPosition==null ? this.WorldPosition : (Vector2)worldPosition;
+            Vector2 findPos = worldPosition == null ? this.WorldPosition : (Vector2)worldPosition;
+            if (!MathUtils.IsValid(findPos))
+            {
+                GameAnalyticsManager.AddErrorEventOnce(
+                    "Ragdoll.FindHull:InvalidPosition",
+                    GameAnalyticsSDK.Net.EGAErrorSeverity.Error,
+                    "Attempted to find a hull at an invalid position (" + findPos + ")\n" + Environment.StackTrace);
+                return;
+            }
 
             Hull newHull = Hull.FindHull(findPos, currentHull);
             
@@ -754,10 +774,13 @@ namespace Barotrauma
                 //this is preferable to the cost of using continuous collision detection for the character collider
                 if (newHull != null)
                 {
+                    Vector2 hullDiff = WorldPosition - newHull.WorldPosition;
+                    Vector2 moveDir = hullDiff.LengthSquared() < 0.001f ? Vector2.UnitY : Vector2.Normalize(hullDiff);
+
                     //find a position 32 units away from the hull
                     Vector2? intersection = MathUtils.GetLineRectangleIntersection(
                         newHull.WorldPosition, 
-                        newHull.WorldPosition + Vector2.Normalize(WorldPosition - newHull.WorldPosition) * Math.Max(newHull.Rect.Width, newHull.Rect.Height),
+                        newHull.WorldPosition + moveDir * Math.Max(newHull.Rect.Width, newHull.Rect.Height),
                         new Rectangle(newHull.WorldRect.X - 32, newHull.WorldRect.Y + 32, newHull.WorldRect.Width + 64, newHull.Rect.Height + 64));
 
                     if (intersection != null)
@@ -774,15 +797,7 @@ namespace Barotrauma
                 //in -> out
                 if (newHull == null && currentHull.Submarine != null)
                 {
-                    for (int i = -1; i < 2; i += 2)
-                    {
-                        //don't teleport outside the sub if right next to a hull
-                        if (Hull.FindHull(findPos + new Vector2(Submarine.GridSize.X * 4.0f * i, 0.0f), currentHull) != null) return;
-                        if (Hull.FindHull(findPos + new Vector2(0.0f, Submarine.GridSize.Y * 4.0f * i), currentHull) != null) return;
-                    }
-
                     if (Gap.FindAdjacent(currentHull.ConnectedGaps, findPos, 150.0f) != null) return;
-
                     Teleport(ConvertUnits.ToSimUnits(currentHull.Submarine.Position), currentHull.Submarine.Velocity);
                 }
                 //out -> in
@@ -799,26 +814,65 @@ namespace Barotrauma
             }
             
             CurrentHull = newHull;
-
-            character.Submarine = currentHull == null ? null : currentHull.Submarine;
-
-            UpdateCollisionCategories();
+            character.Submarine = currentHull?.Submarine;
         }
-        
+
+        private void PreventOutsideCollision()
+        {
+            if (currentHull?.Submarine == null)
+            {
+                outsideCollisionBlocker.Enabled = false;
+                return;
+            }
+
+            var connectedGaps = currentHull.ConnectedGaps.Where(g => !g.IsRoomToRoom);
+            foreach (Gap gap in connectedGaps)
+            {
+                if (gap.IsHorizontal)
+                {
+                    if (character.Position.Y > gap.Rect.Y || character.Position.Y < gap.Rect.Y - gap.Rect.Height) continue;
+                    if (Math.Sign(gap.Rect.Center.X - currentHull.Rect.Center.X) !=
+                        Math.Sign(character.Position.X - currentHull.Rect.Center.X))
+                    {
+                        continue;
+                    }
+                }
+                else
+                {
+                    if (character.Position.X < gap.Rect.X || character.Position.X > gap.Rect.Right) continue;
+                    if (Math.Sign((gap.Rect.Y - gap.Rect.Height / 2) - (currentHull.Rect.Center.X - currentHull.Rect.Height / 2)) !=
+                        Math.Sign(character.Position.X - (currentHull.Rect.Center.X - currentHull.Rect.Height / 2)))
+                    {
+                        continue;
+                    }
+                }
+
+                if (!gap.GetOutsideCollider(out Vector2? outsideColliderPos, out Vector2? outsideColliderNormal)) continue;
+
+                outsideCollisionBlocker.SetTransform(
+                    outsideColliderPos.Value - currentHull.Submarine.SimPosition, 
+                    MathUtils.VectorToAngle(outsideColliderNormal.Value) - MathHelper.PiOver2);
+                outsideCollisionBlocker.Enabled = true;
+                return;
+            }
+
+            outsideCollisionBlocker.Enabled = false;
+        }
+
         public void Teleport(Vector2 moveAmount, Vector2 velocityChange)
         {
             foreach (Limb limb in Limbs)
             {
                 if (limb.IsSevered) continue;
                 if (limb.body.FarseerBody.ContactList == null) continue;
-                
+
                 ContactEdge ce = limb.body.FarseerBody.ContactList;
                 while (ce != null && ce.Contact != null)
                 {
                     ce.Contact.Enabled = false;
                     ce = ce.Next;
-                }                
-            }    
+                }
+            }
 
             foreach (Limb limb in Limbs)
             {
@@ -826,13 +880,12 @@ namespace Barotrauma
                 limb.body.LinearVelocity += velocityChange;
             }
 
-            //character.Stun = 0.1f;
             character.DisableImpactDamageTimer = 0.25f;
 
             SetPosition(Collider.SimPosition + moveAmount);
             character.CursorPosition += moveAmount;
         }
-        
+
         private void UpdateCollisionCategories()
         {
             Category wall = currentHull == null ? 
@@ -842,7 +895,10 @@ namespace Barotrauma
             Category collisionCategory = (ignorePlatforms) ?
                 wall | Physics.CollisionProjectile | Physics.CollisionStairs
                 : wall | Physics.CollisionProjectile | Physics.CollisionPlatform | Physics.CollisionStairs;
-
+            
+            if (collisionCategory == prevCollisionCategory) return;
+            prevCollisionCategory = collisionCategory;
+            
             Collider.CollidesWith = collisionCategory;
 
             foreach (Limb limb in Limbs)
@@ -868,10 +924,12 @@ namespace Barotrauma
 
             UpdateNetPlayerPosition(deltaTime);
             CheckDistFromCollider();
+            UpdateCollisionCategories();
 
             Vector2 flowForce = Vector2.Zero;
 
             FindHull();
+            PreventOutsideCollision();
 
             splashSoundTimer -= deltaTime;
 
@@ -1089,22 +1147,19 @@ namespace Barotrauma
 
                     float tfloorY = rayStart.Y + (rayEnd.Y - rayStart.Y) * closestFraction;
                     float targetY = tfloorY + Collider.height * 0.5f + Collider.radius + colliderHeightFromFloor;
-                    
-                    if (Math.Abs(Collider.SimPosition.Y - targetY) > 0.01f && Collider.SimPosition.Y<targetY && !forceImmediate)
+
+                    if (Math.Abs(Collider.SimPosition.Y - targetY) > 0.01f)
                     {
-                        Vector2 newSpeed = Collider.LinearVelocity;
-                        newSpeed.Y = (targetY - Collider.SimPosition.Y)*5.0f;
-                        Collider.LinearVelocity = newSpeed;
-                    }
-                    else
-                    {
-                        Vector2 newSpeed = Collider.LinearVelocity;
-                        newSpeed.Y = 0.0f;
-                        Collider.LinearVelocity = newSpeed;
-                        Vector2 newPos = Collider.SimPosition;
-                        newPos.Y = targetY;
-                        Collider.SetTransform(newPos, Collider.Rotation);
-                    }
+                        if (forceImmediate)
+                        {
+                            Collider.LinearVelocity = new Vector2(Collider.LinearVelocity.X, 0);
+                            Collider.SetTransform(new Vector2(Collider.SimPosition.X, targetY), Collider.Rotation);
+                        }
+                        else
+                        {
+                            Collider.LinearVelocity = new Vector2(Collider.LinearVelocity.X, (targetY - Collider.SimPosition.Y) * 5.0f);
+                        }
+                    }                
                 }
             }
         }
@@ -1165,6 +1220,16 @@ namespace Barotrauma
 
         public void SetPosition(Vector2 simPosition, bool lerp = false)
         {
+            if (!MathUtils.IsValid(simPosition))
+            {
+                DebugConsole.ThrowError("Attempted to move a ragdoll (" + character.Name + ") to an invalid position (" + simPosition + "). " + Environment.StackTrace);
+                GameAnalyticsManager.AddErrorEventOnce(
+                    "Ragdoll.SetPosition:InvalidPosition",
+                    GameAnalyticsSDK.Net.EGAErrorSeverity.Error,
+                    "Attempted to move a ragdoll (" + character.Name + ") to an invalid position (" + simPosition + "). " + Environment.StackTrace);
+                return;
+            }
+
             Vector2 limbMoveAmount = simPosition - MainLimb.SimPosition;
 
             Collider.SetTransform(simPosition, Collider.Rotation);
@@ -1206,11 +1271,8 @@ namespace Barotrauma
             else
             {
                 limb.body.SetTransform(movePos, limb.Rotation);
-                if (limb.pullJoint != null)
-                {
-                    limb.pullJoint.WorldAnchorB = limb.pullJoint.WorldAnchorA;
-                    limb.pullJoint.Enabled = false;
-                }              
+                limb.PullJointWorldAnchorB = limb.PullJointWorldAnchorA;
+                limb.PullJointEnabled = false;
             }
         }
 
@@ -1245,9 +1307,9 @@ namespace Barotrauma
             {
                 //set the position of the ragdoll to make sure limbs don't get stuck inside walls when re-enabling collisions
                 SetPosition(Collider.SimPosition, true);
-
-                UpdateCollisionCategories();
                 collisionsDisabled = false;
+                //force collision categories to be updated
+                prevCollisionCategory = Category.None;
             }
         }
         
@@ -1312,16 +1374,32 @@ namespace Barotrauma
                         character.AnimController.Anim = AnimController.Animation.None;
                     }
 
-                    Collider.LinearVelocity = Vector2.Zero;
-                    Collider.CorrectPosition(character.MemState, deltaTime, out overrideTargetMovement);
+                    Vector2 newVelocity = Vector2.Zero;
+                    Vector2 newPosition = Collider.SimPosition;
+                    Collider.CorrectPosition(character.MemState, deltaTime, out newVelocity, out newPosition);
+
+                    newVelocity = newVelocity.ClampLength(100.0f);
+                    if (!MathUtils.IsValid(newVelocity)) newVelocity = Vector2.Zero;
+                    overrideTargetMovement = newVelocity;
+                    Collider.LinearVelocity = newVelocity;
+
+                    float distSqrd = Vector2.DistanceSquared(newPosition, Collider.SimPosition);
+                    if (distSqrd > 10.0f)
+                    {
+                        SetPosition(newPosition);
+                    }
+                    else if (distSqrd > 0.01f)
+                    {
+                        Collider.SetTransform(newPosition, Collider.Rotation);
+                    }
 
                     //unconscious/dead characters can't correct their position using AnimController movement
                     // -> we need to correct it manually
                     if (!character.AllowInput)
                     {
                         Collider.LinearVelocity = overrideTargetMovement;
-                        MainLimb.pullJoint.WorldAnchorB = Collider.SimPosition;
-                        MainLimb.pullJoint.Enabled = true;
+                        MainLimb.PullJointWorldAnchorB = Collider.SimPosition;
+                        MainLimb.PullJointEnabled = true;
                     }
                 }
                 character.MemLocalState.Clear();
@@ -1431,10 +1509,18 @@ namespace Barotrauma
                         }
                     }
 
-                    Collider.SetTransform(Collider.SimPosition + positionError, Collider.Rotation + rotationError);
-                    foreach (Limb limb in Limbs)
+                    float errorMagnitude = positionError.Length();
+                    if (errorMagnitude > 0.01f)
                     {
-                        limb.body.SetTransform(limb.body.SimPosition + positionError, limb.body.Rotation);
+                        Collider.SetTransform(Collider.SimPosition + positionError, Collider.Rotation + rotationError);   
+                        if (errorMagnitude > 0.5f)
+                        {
+                            character.MemLocalState.Clear();                 
+                            foreach (Limb limb in Limbs)
+                            {
+                                limb.body.SetTransform(limb.body.SimPosition + positionError, limb.body.Rotation);
+                            }
+                        }    
                     }
                 }
 
@@ -1445,22 +1531,17 @@ namespace Barotrauma
         
         private Vector2 GetFlowForce()
         {
-            Vector2 limbPos = ConvertUnits.ToDisplayUnits(Limbs[0].SimPosition);
+            Vector2 limbPos = Limbs[0].Position;
 
             Vector2 force = Vector2.Zero;
-            foreach (MapEntity e in MapEntity.mapEntityList)
+            foreach (Gap gap in Gap.GapList)
             {
-                Gap gap = e as Gap;
-                if (gap == null || gap.FlowTargetHull != currentHull || gap.LerpedFlowForce == Vector2.Zero) continue;
+                if (gap.Open <= 0.0f || gap.FlowTargetHull != currentHull || gap.LerpedFlowForce.LengthSquared() < 0.01f) continue;
 
                 Vector2 gapPos = gap.SimPosition;
-
                 float dist = Vector2.Distance(limbPos, gapPos);
-
                 force += Vector2.Normalize(gap.LerpedFlowForce) * (Math.Max(gap.LerpedFlowForce.Length() - dist, 0.0f) / 500.0f);
             }
-
-            if (force.Length() > 20.0f) return force;
             return force;
         }
 
@@ -1524,6 +1605,12 @@ namespace Barotrauma
             foreach (PhysicsBody b in collider)
             {
                 b.Remove();
+            }
+
+            if (outsideCollisionBlocker != null)
+            {
+                GameMain.World.RemoveBody(outsideCollisionBlocker);
+                outsideCollisionBlocker = null;
             }
 
             if (LimbJoints != null)
